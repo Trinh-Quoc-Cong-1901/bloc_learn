@@ -33,6 +33,7 @@
         repositories/
           todo_repository.dart
         usecases/
+          search_completed_todos.dart
           add_todo.dart
           update_todo.dart
           get_todos.dart
@@ -42,11 +43,41 @@
       presentation/
         pages/
           todo_list_page.dart
+          search_completed_todos_page.dart
         widgets/
         bloc/
+          search_event.dart
           todo_bloc.dart
           todo_state.dart
+          search_state.dart
           todo_event.dart
+          search_bloc.dart
+    notes/
+      data/
+        datasources/
+          notes_local_data_source.dart
+        repositories/
+          notes_repository_impl.dart
+        models/
+          note_model.dart
+      domain/
+        repositories/
+          notes_repository.dart
+        usecases/
+          update_note.dart
+          add_note.dart
+          delete_note.dart
+          get_notes.dart
+        entities/
+          note_entity.dart
+      presentation/
+        pages/
+          note_list_page.dart
+        widgets/
+        bloc/
+          note_bloc.dart
+          note_state.dart
+          note_event.dart
 ```
 
 
@@ -119,13 +150,23 @@ class MyApp extends StatelessWidget {
 import 'package:bloc_learn/core/db/database_helper.dart';
 import 'package:bloc_learn/core/theme/bloc/theme_bloc.dart';
 import 'package:bloc_learn/core/theme/theme_preferences.dart';
+import 'package:bloc_learn/features/notes/data/datasources/notes_local_data_source.dart';
+import 'package:bloc_learn/features/notes/data/repositories/notes_repository_impl.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/add_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/delete_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/get_notes.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/update_note.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_bloc.dart';
 import 'package:bloc_learn/features/todo/data/datasources/todo_local_data_source.dart';
 import 'package:bloc_learn/features/todo/data/repositories/todo_repository_impl.dart';
 import 'package:bloc_learn/features/todo/domain/repositories/todo_repository.dart';
 import 'package:bloc_learn/features/todo/domain/usecases/add_todo.dart';
 import 'package:bloc_learn/features/todo/domain/usecases/delete_todo.dart';
 import 'package:bloc_learn/features/todo/domain/usecases/get_todos.dart';
+import 'package:bloc_learn/features/todo/domain/usecases/search_completed_todos.dart';
 import 'package:bloc_learn/features/todo/domain/usecases/update_todo.dart';
+import 'package:bloc_learn/features/todo/presentation/bloc/search_bloc.dart';
 import 'package:bloc_learn/features/todo/presentation/bloc/todo_bloc.dart';
 import 'package:get_it/get_it.dart';
 
@@ -140,6 +181,9 @@ Future<void> init() async {
 
   // Theme
   sl.registerFactory(() => ThemeBloc(themePreferences: sl())); // Thêm dòng này
+  sl.registerFactory(
+    () => SearchBloc(searchCompletedTodos: sl()),
+  ); // Thêm dòng này
   // Features - Todo
   // BLoC
   // Đăng ký là factory vì BLoC thường có state riêng và nên được tạo mới khi cần
@@ -158,6 +202,27 @@ Future<void> init() async {
   sl.registerLazySingleton(() => AddTodo(sl()));
   sl.registerLazySingleton(() => UpdateTodo(sl()));
   sl.registerLazySingleton(() => DeleteTodo(sl()));
+  sl.registerLazySingleton(() => SearchCompletedTodos(sl())); // Thêm dòng này
+
+  // Features - Notes
+  sl.registerFactory(
+    () => NoteBloc(
+      getNotes: sl(),
+      addNote: sl(),
+      updateNote: sl(),
+      deleteNote: sl(),
+    ),
+  );
+  sl.registerLazySingleton(() => GetNotes(sl()));
+  sl.registerLazySingleton(() => AddNote(sl()));
+  sl.registerLazySingleton(() => UpdateNote(sl()));
+  sl.registerLazySingleton(() => DeleteNote(sl()));
+  sl.registerLazySingleton<NotesRepository>(
+    () => NotesRepositoryImpl(localDataSource: sl()),
+  );
+  sl.registerLazySingleton<NotesLocalDataSource>(
+    () => NotesLocalDataSourceImpl(databaseHelper: sl()),
+  );
 
   // Repository
   // Đăng ký interface TodoRepository với implementation là TodoRepositoryImpl
@@ -336,7 +401,6 @@ class ThemeState extends Equatable {
 ### core/db/database_helper.dart
 
 ```dart
-// Path: lib/core/db/database_helper.dart
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -346,15 +410,15 @@ class DatabaseHelper {
   static const _databaseVersion = 1;
 
   static const tableTodo = 'todos';
+  static const tableNotes = 'notes';
   static const columnId = 'id';
   static const columnTitle = 'title';
   static const columnIsCompleted = 'isCompleted';
+  static const columnContent = 'content';
 
-  // Make this a singleton class
   DatabaseHelper._privateConstructor();
   static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
 
-  // Only have a single app-wide reference to the database
   static Database? _database;
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -362,7 +426,6 @@ class DatabaseHelper {
     return _database!;
   }
 
-  // Open the database and create it if it doesn't exist
   _initDatabase() async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, _databaseName);
@@ -373,7 +436,6 @@ class DatabaseHelper {
     );
   }
 
-  // SQL code to create the database table
   Future _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE $tableTodo (
@@ -381,7 +443,13 @@ class DatabaseHelper {
         $columnTitle TEXT NOT NULL,
         $columnIsCompleted INTEGER NOT NULL DEFAULT 0
       )
-      ''');
+    ''');
+    await db.execute('''
+      CREATE TABLE $tableNotes (
+        $columnId INTEGER PRIMARY KEY AUTOINCREMENT,
+        $columnContent TEXT NOT NULL
+      )
+    ''');
   }
 }
 
@@ -471,6 +539,7 @@ abstract class TodoLocalDataSource {
   Future<TodoModel> addTodo(TodoModel todo);
   Future<TodoModel> updateTodo(TodoModel todo);
   Future<void> deleteTodo(int id);
+  Future<List<TodoModel>> searchCompletedTodos(String keyword); // Thêm dòng này
 }
 
 class TodoLocalDataSourceImpl implements TodoLocalDataSource {
@@ -542,6 +611,27 @@ class TodoLocalDataSourceImpl implements TodoLocalDataSource {
       throw DatabaseFailure(message: 'Failed to delete todo: ${e.toString()}');
     }
   }
+
+  @override
+  Future<List<TodoModel>> searchCompletedTodos(String keyword) async {
+    try {
+      final db = await databaseHelper.database;
+      final List<Map<String, dynamic>> maps = await db.query(
+        DatabaseHelper.tableTodo,
+        where:
+            '${DatabaseHelper.columnIsCompleted} = ? AND ${DatabaseHelper.columnTitle} LIKE ?',
+        whereArgs: [1, '%$keyword%'],
+        orderBy: '${DatabaseHelper.columnId} DESC',
+      );
+      return List.generate(maps.length, (i) {
+        return TodoModel.fromMap(maps[i]);
+      });
+    } catch (e) {
+      throw DatabaseFailure(
+        message: 'Failed to search completed todos: ${e.toString()}',
+      );
+    }
+  }
 }
 
 ```
@@ -552,10 +642,6 @@ class TodoLocalDataSourceImpl implements TodoLocalDataSource {
 ### features/todo/data/repositories/todo_repository_impl.dart
 
 ```dart
-// Path: lib/features/todo/data/repositories/todo_repository_impl.dart
-
-// Nếu dùng dartz: import 'package:dartz/dartz.dart';
-
 import 'package:bloc_learn/core/error/failures.dart';
 import 'package:bloc_learn/features/todo/data/datasources/todo_local_data_source.dart';
 import 'package:bloc_learn/features/todo/data/models/todo_model.dart';
@@ -564,24 +650,17 @@ import 'package:bloc_learn/features/todo/domain/repositories/todo_repository.dar
 
 class TodoRepositoryImpl implements TodoRepository {
   final TodoLocalDataSource localDataSource;
-  // Có thể thêm NetworkInfo nếu cần kiểm tra kết nối mạng cho remoteDataSource
 
   TodoRepositoryImpl({required this.localDataSource});
 
   @override
   Future<List<TodoEntity>> getTodos() async {
-    // Nếu dùng dartz: Future<Either<Failure, List<TodoEntity>>> getTodos() async {
     try {
       final todoModels = await localDataSource.getTodos();
-      // Chuyển đổi List<TodoModel> sang List<TodoEntity>
-      // Ở đây TodoModel đã là TodoEntity nên không cần chuyển đổi tường minh,
-      // nhưng nếu có sự khác biệt thì cần map lại.
-      return todoModels; // return Right(todoModels);
+      return todoModels;
     } on DatabaseFailure catch (e) {
-      // return Left(DatabaseFailure(message: e.message));
-      rethrow; // Hoặc throw e nếu đã là Failure
+      rethrow;
     } catch (e) {
-      // return Left(ServerFailure(message: 'An unexpected error occurred: ${e.toString()}'));
       throw ServerFailure(
         message: 'An unexpected error occurred: ${e.toString()}',
       );
@@ -590,48 +669,52 @@ class TodoRepositoryImpl implements TodoRepository {
 
   @override
   Future<TodoEntity> addTodo(TodoEntity todo) async {
-    // Nếu dùng dartz: Future<Either<Failure, TodoEntity>> addTodo(TodoEntity todo) async {
     try {
       final todoModel = TodoModel.fromEntity(todo);
       final addedTodoModel = await localDataSource.addTodo(todoModel);
-      return addedTodoModel; // return Right(addedTodoModel);
+      return addedTodoModel;
     } on DatabaseFailure catch (e) {
-      // return Left(DatabaseFailure(message: e.message));
       rethrow;
     } catch (e) {
-      // return Left(ServerFailure(message: 'Failed to add todo: ${e.toString()}'));
       throw ServerFailure(message: 'Failed to add todo: ${e.toString()}');
     }
   }
 
   @override
   Future<TodoEntity> updateTodo(TodoEntity todo) async {
-    // Nếu dùng dartz: Future<Either<Failure, TodoEntity>> updateTodo(TodoEntity todo) async {
     try {
       final todoModel = TodoModel.fromEntity(todo);
       final updatedTodoModel = await localDataSource.updateTodo(todoModel);
-      return updatedTodoModel; // return Right(updatedTodoModel);
+      return updatedTodoModel;
     } on DatabaseFailure catch (e) {
-      // return Left(DatabaseFailure(message: e.message));
       rethrow;
     } catch (e) {
-      // return Left(ServerFailure(message: 'Failed to update todo: ${e.toString()}'));
       throw ServerFailure(message: 'Failed to update todo: ${e.toString()}');
     }
   }
 
   @override
   Future<void> deleteTodo(int id) async {
-    // Nếu dùng dartz: Future<Either<Failure, void>> deleteTodo(int id) async {
     try {
       await localDataSource.deleteTodo(id);
-      // return const Right(null); // null ở đây tương đương void
     } on DatabaseFailure catch (e) {
-      // return Left(DatabaseFailure(message: e.message));
       rethrow;
     } catch (e) {
-      // return Left(ServerFailure(message: 'Failed to delete todo: ${e.toString()}'));
       throw ServerFailure(message: 'Failed to delete todo: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<List<TodoEntity>> searchCompletedTodos(String keyword) async {
+    try {
+      final todoModels = await localDataSource.searchCompletedTodos(keyword);
+      return todoModels;
+    } on DatabaseFailure catch (e) {
+      rethrow;
+    } catch (e) {
+      throw ServerFailure(
+        message: 'Failed to search completed todos: ${e.toString()}',
+      );
     }
   }
 }
@@ -711,7 +794,45 @@ abstract class TodoRepository {
   Future<List<TodoEntity>> getTodos();
   Future<TodoEntity> addTodo(TodoEntity todo);
   Future<TodoEntity> updateTodo(TodoEntity todo);
+
   Future<void> deleteTodo(int id); // Hoặc Future<Either<Failure, void>>
+  Future<List<TodoEntity>> searchCompletedTodos(
+    String keyword,
+  ); // Thêm dòng này
+}
+
+```
+
+---
+
+
+### features/todo/domain/usecases/search_completed_todos.dart
+
+```dart
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/todo/domain/entities/todo_entity.dart';
+import 'package:bloc_learn/features/todo/domain/repositories/todo_repository.dart';
+import 'package:equatable/equatable.dart';
+
+class SearchCompletedTodos
+    implements UseCaseWithParams<List<TodoEntity>, SearchCompletedTodosParams> {
+  final TodoRepository repository;
+
+  SearchCompletedTodos(this.repository);
+
+  @override
+  Future<List<TodoEntity>> call(SearchCompletedTodosParams params) async {
+    return await repository.searchCompletedTodos(params.keyword);
+  }
+}
+
+class SearchCompletedTodosParams extends Equatable {
+  final String keyword;
+
+  const SearchCompletedTodosParams({required this.keyword});
+
+  @override
+  List<Object?> get props => [keyword];
 }
 
 ```
@@ -896,7 +1017,12 @@ class TodoEntity extends Equatable {
 ```dart
 import 'package:bloc_learn/core/theme/bloc/theme_bloc.dart';
 import 'package:bloc_learn/core/theme/theme_data.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_bloc.dart';
+import 'package:bloc_learn/features/notes/presentation/pages/note_list_page.dart';
+import 'package:bloc_learn/features/todo/presentation/bloc/search_bloc.dart';
 import 'package:bloc_learn/features/todo/presentation/bloc/todo_bloc.dart';
+import 'package:bloc_learn/features/todo/presentation/pages/search_completed_todos_page.dart';
+import 'package:bloc_learn/injection_container.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -966,6 +1092,38 @@ class _TodoListPageState extends State<TodoListPage> {
         title: const Text('Todo List (Clean Arch + BLoC)'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder:
+                      (_) => BlocProvider(
+                        create: (_) => sl<SearchBloc>(),
+                        child: const SearchCompletedTodosPage(),
+                      ),
+                ),
+              );
+            },
+            tooltip: 'Search Completed Todos',
+          ),
+          IconButton(
+            icon: const Icon(Icons.note),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder:
+                      (_) => BlocProvider(
+                        create: (_) => sl<NoteBloc>(),
+                        child: const NoteListPage(),
+                      ),
+                ),
+              );
+            },
+            tooltip: 'View Notes',
+          ),
           BlocBuilder<ThemeBloc, ThemeState>(
             builder: (context, state) {
               return IconButton(
@@ -1056,6 +1214,126 @@ class _TodoListPageState extends State<TodoListPage> {
       ),
     );
   }
+}
+
+```
+
+---
+
+
+### features/todo/presentation/pages/search_completed_todos_page.dart
+
+```dart
+import 'package:bloc_learn/features/todo/presentation/bloc/search_bloc.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+class SearchCompletedTodosPage extends StatefulWidget {
+  const SearchCompletedTodosPage({super.key});
+
+  @override
+  State<SearchCompletedTodosPage> createState() =>
+      _SearchCompletedTodosPageState();
+}
+
+class _SearchCompletedTodosPageState extends State<SearchCompletedTodosPage> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Search Completed Todos'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                hintText: 'Search completed todos...',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: (value) {
+                context.read<SearchBloc>().add(
+                  SearchTodosEvent(keyword: value),
+                );
+              },
+            ),
+          ),
+          Expanded(
+            child: BlocBuilder<SearchBloc, SearchState>(
+              builder: (context, state) {
+                if (state is SearchInitial) {
+                  return const Center(child: Text('Enter a keyword to search'));
+                } else if (state is SearchLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                } else if (state is SearchLoaded) {
+                  return ListView.builder(
+                    itemCount: state.todos.length,
+                    itemBuilder: (context, index) {
+                      final todo = state.todos[index];
+                      return ListTile(
+                        title: Text(
+                          todo.title,
+                          style: const TextStyle(
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                } else if (state is SearchEmpty) {
+                  return const Center(child: Text('No results found'));
+                } else if (state is SearchError) {
+                  return Center(child: Text('Error: ${state.message}'));
+                }
+                return const Center(child: Text('Something went wrong'));
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+```
+
+---
+
+
+### features/todo/presentation/bloc/search_event.dart
+
+```dart
+part of 'search_bloc.dart';
+
+abstract class SearchEvent extends Equatable {
+  const SearchEvent();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class SearchTodosEvent extends SearchEvent {
+  final String keyword;
+
+  const SearchTodosEvent({required this.keyword});
+
+  @override
+  List<Object?> get props => [keyword];
 }
 
 ```
@@ -1209,6 +1487,47 @@ class TodoError extends TodoState {
 ---
 
 
+### features/todo/presentation/bloc/search_state.dart
+
+```dart
+part of 'search_bloc.dart';
+
+abstract class SearchState extends Equatable {
+  const SearchState();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class SearchInitial extends SearchState {}
+
+class SearchLoading extends SearchState {}
+
+class SearchLoaded extends SearchState {
+  final List<TodoEntity> todos;
+
+  const SearchLoaded({required this.todos});
+
+  @override
+  List<Object?> get props => [todos];
+}
+
+class SearchEmpty extends SearchState {}
+
+class SearchError extends SearchState {
+  final String message;
+
+  const SearchError({required this.message});
+
+  @override
+  List<Object?> get props => [message];
+}
+
+```
+
+---
+
+
 ### features/todo/presentation/bloc/todo_event.dart
 
 ```dart
@@ -1246,6 +1565,754 @@ class DeleteTodoEvent extends TodoEvent {
   final int id;
 
   const DeleteTodoEvent({required this.id});
+
+  @override
+  List<Object?> get props => [id];
+}
+
+```
+
+---
+
+
+### features/todo/presentation/bloc/search_bloc.dart
+
+```dart
+import 'package:bloc/bloc.dart';
+import 'package:bloc_learn/core/error/failures.dart';
+import 'package:bloc_learn/features/todo/domain/entities/todo_entity.dart';
+import 'package:bloc_learn/features/todo/domain/usecases/search_completed_todos.dart';
+import 'package:equatable/equatable.dart';
+
+part 'search_event.dart';
+part 'search_state.dart';
+
+class SearchBloc extends Bloc<SearchEvent, SearchState> {
+  final SearchCompletedTodos searchCompletedTodos;
+
+  SearchBloc({required this.searchCompletedTodos}) : super(SearchInitial()) {
+    on<SearchTodosEvent>(_onSearchTodos);
+  }
+
+  Future<void> _onSearchTodos(
+    SearchTodosEvent event,
+    Emitter<SearchState> emit,
+  ) async {
+    if (event.keyword.isEmpty) {
+      emit(SearchInitial());
+      return;
+    }
+
+    emit(SearchLoading());
+    try {
+      final todos = await searchCompletedTodos(
+        SearchCompletedTodosParams(keyword: event.keyword),
+      );
+      if (todos.isEmpty) {
+        emit(SearchEmpty());
+      } else {
+        emit(SearchLoaded(todos: todos));
+      }
+    } catch (e) {
+      if (e is Failure) {
+        emit(SearchError(message: e.message));
+      } else {
+        emit(
+          SearchError(message: 'An unexpected error occurred: ${e.toString()}'),
+        );
+      }
+    }
+  }
+}
+
+```
+
+---
+
+
+### features/notes/data/datasources/notes_local_data_source.dart
+
+```dart
+import 'package:bloc_learn/core/db/database_helper.dart';
+import 'package:bloc_learn/core/error/failures.dart';
+import 'package:bloc_learn/features/notes/data/models/note_model.dart';
+
+abstract class NotesLocalDataSource {
+  Future<List<NoteModel>> getNotes();
+  Future<NoteModel> addNote(NoteModel note);
+  Future<NoteModel> updateNote(NoteModel note);
+  Future<void> deleteNote(int id);
+}
+
+class NotesLocalDataSourceImpl implements NotesLocalDataSource {
+  final DatabaseHelper databaseHelper;
+
+  NotesLocalDataSourceImpl({required this.databaseHelper});
+
+  @override
+  Future<List<NoteModel>> getNotes() async {
+    try {
+      final db = await databaseHelper.database;
+      final maps = await db.query('notes', orderBy: 'id DESC');
+      return List.generate(maps.length, (i) => NoteModel.fromMap(maps[i]));
+    } catch (e) {
+      throw DatabaseFailure(message: 'Failed to get notes: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<NoteModel> addNote(NoteModel note) async {
+    try {
+      final db = await databaseHelper.database;
+      final id = await db.insert('notes', note.toMap());
+      return NoteModel(id: id, content: note.content);
+    } catch (e) {
+      throw DatabaseFailure(message: 'Failed to add note: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<NoteModel> updateNote(NoteModel note) async {
+    try {
+      final db = await databaseHelper.database;
+      await db.update(
+        'notes',
+        note.toMap(),
+        where: 'id = ?',
+        whereArgs: [note.id],
+      );
+      return note;
+    } catch (e) {
+      throw DatabaseFailure(message: 'Failed to update note: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<void> deleteNote(int id) async {
+    try {
+      final db = await databaseHelper.database;
+      await db.delete('notes', where: 'id = ?', whereArgs: [id]);
+    } catch (e) {
+      throw DatabaseFailure(message: 'Failed to delete note: ${e.toString()}');
+    }
+  }
+}
+
+```
+
+---
+
+
+### features/notes/data/repositories/notes_repository_impl.dart
+
+```dart
+import 'package:bloc_learn/core/error/failures.dart';
+import 'package:bloc_learn/features/notes/data/datasources/notes_local_data_source.dart';
+import 'package:bloc_learn/features/notes/data/models/note_model.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+
+class NotesRepositoryImpl implements NotesRepository {
+  final NotesLocalDataSource localDataSource;
+
+  NotesRepositoryImpl({required this.localDataSource});
+
+  @override
+  Future<List<NoteEntity>> getNotes() async {
+    try {
+      final noteModels = await localDataSource.getNotes();
+      return noteModels;
+    } on DatabaseFailure catch (e) {
+      rethrow;
+    } catch (e) {
+      throw ServerFailure(
+        message: 'An unexpected error occurred: ${e.toString()}',
+      );
+    }
+  }
+
+  @override
+  Future<NoteEntity> addNote(NoteEntity note) async {
+    try {
+      final noteModel = NoteModel.fromEntity(note);
+      final addedNoteModel = await localDataSource.addNote(noteModel);
+      return addedNoteModel;
+    } on DatabaseFailure catch (e) {
+      rethrow;
+    } catch (e) {
+      throw ServerFailure(message: 'Failed to add note: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<NoteEntity> updateNote(NoteEntity note) async {
+    try {
+      final noteModel = NoteModel.fromEntity(note);
+      final updatedNoteModel = await localDataSource.updateNote(noteModel);
+      return updatedNoteModel;
+    } on DatabaseFailure catch (e) {
+      rethrow;
+    } catch (e) {
+      throw ServerFailure(message: 'Failed to update note: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<void> deleteNote(int id) async {
+    try {
+      await localDataSource.deleteNote(id);
+    } on DatabaseFailure catch (e) {
+      rethrow;
+    } catch (e) {
+      throw ServerFailure(message: 'Failed to delete note: ${e.toString()}');
+    }
+  }
+}
+
+```
+
+---
+
+
+### features/notes/data/models/note_model.dart
+
+```dart
+import 'package:bloc_learn/core/db/database_helper.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+
+class NoteModel extends NoteEntity {
+  const NoteModel({super.id, required super.content});
+
+  factory NoteModel.fromEntity(NoteEntity entity) {
+    return NoteModel(id: entity.id, content: entity.content);
+  }
+
+  factory NoteModel.fromMap(Map<String, dynamic> map) {
+    return NoteModel(
+      id: map[DatabaseHelper.columnId] as int?,
+      content: map['content'] as String,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {DatabaseHelper.columnId: id, 'content': content};
+  }
+}
+
+```
+
+---
+
+
+### features/notes/domain/repositories/notes_repository.dart
+
+```dart
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+
+abstract class NotesRepository {
+  Future<List<NoteEntity>> getNotes();
+  Future<NoteEntity> addNote(NoteEntity note);
+  Future<NoteEntity> updateNote(NoteEntity note);
+  Future<void> deleteNote(int id);
+}
+
+```
+
+---
+
+
+### features/notes/domain/usecases/update_note.dart
+
+```dart
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+import 'package:equatable/equatable.dart';
+
+class UpdateNote implements UseCaseWithParams<NoteEntity, UpdateNoteParams> {
+  final NotesRepository repository;
+
+  UpdateNote(this.repository);
+
+  @override
+  Future<NoteEntity> call(UpdateNoteParams params) async {
+    return await repository.updateNote(params.note);
+  }
+}
+
+class UpdateNoteParams extends Equatable {
+  final NoteEntity note;
+
+  const UpdateNoteParams({required this.note});
+
+  @override
+  List<Object?> get props => [note];
+}
+
+```
+
+---
+
+
+### features/notes/domain/usecases/add_note.dart
+
+```dart
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+import 'package:equatable/equatable.dart';
+
+class AddNote implements UseCaseWithParams<NoteEntity, AddNoteParams> {
+  final NotesRepository repository;
+
+  AddNote(this.repository);
+
+  @override
+  Future<NoteEntity> call(AddNoteParams params) async {
+    final note = NoteEntity(content: params.content);
+    return await repository.addNote(note);
+  }
+}
+
+class AddNoteParams extends Equatable {
+  final String content;
+
+  const AddNoteParams({required this.content});
+
+  @override
+  List<Object?> get props => [content];
+}
+
+```
+
+---
+
+
+### features/notes/domain/usecases/delete_note.dart
+
+```dart
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+import 'package:equatable/equatable.dart';
+
+class DeleteNote implements UseCaseWithParams<void, DeleteNoteParams> {
+  final NotesRepository repository;
+
+  DeleteNote(this.repository);
+
+  @override
+  Future<void> call(DeleteNoteParams params) async {
+    return await repository.deleteNote(params.id);
+  }
+}
+
+class DeleteNoteParams extends Equatable {
+  final int id;
+
+  const DeleteNoteParams({required this.id});
+
+  @override
+  List<Object?> get props => [id];
+}
+
+```
+
+---
+
+
+### features/notes/domain/usecases/get_notes.dart
+
+```dart
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+
+class GetNotes implements UseCase<List<NoteEntity>, NoParams> {
+  final NotesRepository repository;
+
+  GetNotes(this.repository);
+
+  @override
+  Future<List<NoteEntity>> call(NoParams params) async {
+    return await repository.getNotes();
+  }
+}
+
+```
+
+---
+
+
+### features/notes/domain/entities/note_entity.dart
+
+```dart
+import 'package:equatable/equatable.dart';
+
+class NoteEntity extends Equatable {
+  final int? id;
+  final String content;
+
+  const NoteEntity({this.id, required this.content});
+
+  @override
+  List<Object?> get props => [id, content];
+
+  // Thêm phương thức copyWith
+  NoteEntity copyWith({int? id, String? content}) {
+    return NoteEntity(id: id ?? this.id, content: content ?? this.content);
+  }
+}
+
+```
+
+---
+
+
+### features/notes/presentation/pages/note_list_page.dart
+
+```dart
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_bloc.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_event.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_state.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+class NoteListPage extends StatefulWidget {
+  const NoteListPage({super.key});
+
+  @override
+  State<NoteListPage> createState() => _NoteListPageState();
+}
+
+class _NoteListPageState extends State<NoteListPage> {
+  final TextEditingController _contentController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<NoteBloc>().add(LoadNotesEvent());
+  }
+
+  @override
+  void dispose() {
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  void _showAddNoteDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Add New Note'),
+          content: TextField(
+            controller: _contentController,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'Enter note content'),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _contentController.clear();
+              },
+            ),
+            TextButton(
+              child: const Text('Add'),
+              onPressed: () {
+                if (_contentController.text.isNotEmpty) {
+                  context.read<NoteBloc>().add(
+                    AddNoteEvent(content: _contentController.text),
+                  );
+                  _contentController.clear();
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showUpdateNoteDialog(BuildContext context, NoteEntity note) {
+    _contentController.text = note.content;
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Update Note'),
+          content: TextField(
+            controller: _contentController,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'Enter note content'),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _contentController.clear();
+              },
+            ),
+            TextButton(
+              child: const Text('Update'),
+              onPressed: () {
+                if (_contentController.text.isNotEmpty) {
+                  context.read<NoteBloc>().add(
+                    UpdateNoteEvent(
+                      note: note.copyWith(content: _contentController.text),
+                    ),
+                  );
+                  _contentController.clear();
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notes')),
+      body: BlocConsumer<NoteBloc, NoteState>(
+        listener: (context, state) {
+          if (state is NoteError) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(state.message),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        },
+        builder: (context, state) {
+          if (state is NoteInitial || state is NoteLoading) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (state is NoteLoaded) {
+            if (state.notes.isEmpty) {
+              return const Center(child: Text('No notes yet! Add one.'));
+            }
+            return ListView.builder(
+              itemCount: state.notes.length,
+              itemBuilder: (context, index) {
+                final note = state.notes[index];
+                return ListTile(
+                  title: Text(note.content),
+                  onTap: () => _showUpdateNoteDialog(context, note),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent),
+                    onPressed: () {
+                      if (note.id != null) {
+                        context.read<NoteBloc>().add(
+                          DeleteNoteEvent(id: note.id!),
+                        );
+                      }
+                    },
+                  ),
+                );
+              },
+            );
+          } else if (state is NoteError) {
+            return Center(child: Text('Error hdsfhadshfd: ${state.message}'));
+          }
+          return const Center(child: Text('Something went wrong.'));
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showAddNoteDialog(context),
+        tooltip: 'Add Note',
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+```
+
+---
+
+
+### features/notes/presentation/bloc/note_bloc.dart
+
+```dart
+import 'package:bloc/bloc.dart';
+import 'package:bloc_learn/core/error/failures.dart';
+import 'package:bloc_learn/core/usecases/usecase.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/add_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/delete_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/get_notes.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/update_note.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_event.dart';
+
+import 'package:bloc_learn/features/notes/presentation/bloc/note_state.dart';
+
+class NoteBloc extends Bloc<NoteEvent, NoteState> {
+  final GetNotes getNotes;
+  final AddNote addNote;
+  final UpdateNote updateNote;
+  final DeleteNote deleteNote;
+
+  NoteBloc({
+    required this.getNotes,
+    required this.addNote,
+    required this.updateNote,
+    required this.deleteNote,
+  }) : super(NoteInitial()) {
+    on<LoadNotesEvent>(_onLoadNotes);
+    on<AddNoteEvent>(_onAddNote);
+    on<UpdateNoteEvent>(_onUpdateNote);
+    on<DeleteNoteEvent>(_onDeleteNote);
+  }
+
+  Future<void> _onLoadNotes(
+    LoadNotesEvent event,
+    Emitter<NoteState> emit,
+  ) async {
+    emit(NoteLoading());
+    try {
+      final notes = await getNotes(NoParams());
+      emit(NoteLoaded(notes: notes));
+    } catch (e) {
+      _handleError(e, emit);
+    }
+  }
+
+  Future<void> _onAddNote(AddNoteEvent event, Emitter<NoteState> emit) async {
+    try {
+      await addNote(AddNoteParams(content: event.content));
+      add(LoadNotesEvent());
+    } catch (e) {
+      _handleError(e, emit, "Failed to add note: ");
+    }
+  }
+
+  Future<void> _onUpdateNote(
+    UpdateNoteEvent event,
+    Emitter<NoteState> emit,
+  ) async {
+    try {
+      await updateNote(UpdateNoteParams(note: event.note));
+      add(LoadNotesEvent());
+    } catch (e) {
+      _handleError(e, emit, "Failed to update note: ");
+    }
+  }
+
+  Future<void> _onDeleteNote(
+    DeleteNoteEvent event,
+    Emitter<NoteState> emit,
+  ) async {
+    try {
+      await deleteNote(DeleteNoteParams(id: event.id));
+      add(LoadNotesEvent());
+    } catch (e) {
+      _handleError(e, emit, "Failed to delete note: ");
+    }
+  }
+
+  void _handleError(Object e, Emitter<NoteState> emit, [String prefix = ""]) {
+    if (e is Failure) {
+      emit(NoteError(message: "$prefix${e.message}"));
+    } else {
+      emit(
+        NoteError(
+          message: "${prefix}An unexpected error occurred: ${e.toString()}",
+        ),
+      );
+    }
+  }
+}
+
+```
+
+---
+
+
+### features/notes/presentation/bloc/note_state.dart
+
+```dart
+import 'package:equatable/equatable.dart';
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+
+abstract class NoteState extends Equatable {
+  const NoteState();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class NoteInitial extends NoteState {}
+
+class NoteLoading extends NoteState {}
+
+class NoteLoaded extends NoteState {
+  final List<NoteEntity> notes;
+
+  const NoteLoaded({required this.notes});
+
+  @override
+  List<Object?> get props => [notes];
+}
+
+class NoteError extends NoteState {
+  final String message;
+
+  const NoteError({required this.message});
+
+  @override
+  List<Object?> get props => [message];
+}
+
+```
+
+---
+
+
+### features/notes/presentation/bloc/note_event.dart
+
+```dart
+import 'package:bloc_learn/features/notes/domain/entities/note_entity.dart';
+import 'package:equatable/equatable.dart';
+
+abstract class NoteEvent extends Equatable {
+  const NoteEvent();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class LoadNotesEvent extends NoteEvent {}
+
+class AddNoteEvent extends NoteEvent {
+  final String content;
+
+  const AddNoteEvent({required this.content});
+
+  @override
+  List<Object?> get props => [content];
+}
+
+class UpdateNoteEvent extends NoteEvent {
+  final NoteEntity note;
+
+  const UpdateNoteEvent({required this.note});
+
+  @override
+  List<Object?> get props => [note];
+}
+
+class DeleteNoteEvent extends NoteEvent {
+  final int id;
+
+  const DeleteNoteEvent({required this.id});
 
   @override
   List<Object?> get props => [id];

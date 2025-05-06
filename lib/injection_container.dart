@@ -2,6 +2,14 @@
 import 'package:bloc_learn/core/db/database_helper.dart';
 import 'package:bloc_learn/core/theme/bloc/theme_bloc.dart';
 import 'package:bloc_learn/core/theme/theme_preferences.dart';
+import 'package:bloc_learn/features/notes/data/datasources/notes_local_data_source.dart';
+import 'package:bloc_learn/features/notes/data/repositories/notes_repository_impl.dart';
+import 'package:bloc_learn/features/notes/domain/repositories/notes_repository.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/add_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/delete_note.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/get_notes.dart';
+import 'package:bloc_learn/features/notes/domain/usecases/update_note.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_bloc.dart';
 import 'package:bloc_learn/features/todo/data/datasources/todo_local_data_source.dart';
 import 'package:bloc_learn/features/todo/data/repositories/todo_repository_impl.dart';
 import 'package:bloc_learn/features/todo/domain/repositories/todo_repository.dart';
@@ -47,6 +55,26 @@ Future<void> init() async {
   sl.registerLazySingleton(() => UpdateTodo(sl()));
   sl.registerLazySingleton(() => DeleteTodo(sl()));
   sl.registerLazySingleton(() => SearchCompletedTodos(sl())); // Thêm dòng này
+
+  // Features - Notes
+  sl.registerFactory(
+    () => NoteBloc(
+      getNotes: sl(),
+      addNote: sl(),
+      updateNote: sl(),
+      deleteNote: sl(),
+    ),
+  );
+  sl.registerLazySingleton(() => GetNotes(sl()));
+  sl.registerLazySingleton(() => AddNote(sl()));
+  sl.registerLazySingleton(() => UpdateNote(sl()));
+  sl.registerLazySingleton(() => DeleteNote(sl()));
+  sl.registerLazySingleton<NotesRepository>(
+    () => NotesRepositoryImpl(localDataSource: sl()),
+  );
+  sl.registerLazySingleton<NotesLocalDataSource>(
+    () => NotesLocalDataSourceImpl(databaseHelper: sl()),
+  );
 
   // Repository
   // Đăng ký interface TodoRepository với implementation là TodoRepositoryImpl

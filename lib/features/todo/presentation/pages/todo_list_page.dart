@@ -1,5 +1,7 @@
 import 'package:bloc_learn/core/theme/bloc/theme_bloc.dart';
 import 'package:bloc_learn/core/theme/theme_data.dart';
+import 'package:bloc_learn/features/notes/presentation/bloc/note_bloc.dart';
+import 'package:bloc_learn/features/notes/presentation/pages/note_list_page.dart';
 import 'package:bloc_learn/features/todo/presentation/bloc/search_bloc.dart';
 import 'package:bloc_learn/features/todo/presentation/bloc/todo_bloc.dart';
 import 'package:bloc_learn/features/todo/presentation/pages/search_completed_todos_page.dart';
@@ -88,6 +90,22 @@ class _TodoListPageState extends State<TodoListPage> {
               );
             },
             tooltip: 'Search Completed Todos',
+          ),
+          IconButton(
+            icon: const Icon(Icons.note),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder:
+                      (_) => BlocProvider(
+                        create: (_) => sl<NoteBloc>(),
+                        child: const NoteListPage(),
+                      ),
+                ),
+              );
+            },
+            tooltip: 'View Notes',
           ),
           BlocBuilder<ThemeBloc, ThemeState>(
             builder: (context, state) {
